@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全国批发市场及气象交互地图</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: "Microsoft YaHei", sans-serif; }
+        #map { height: 100vh; width: 100%; background: #f4f4f4; }
+        
+        /* 侧边控制面板 */
+        .control-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+            width: 260px;
+            transition: transform 0.3s ease;
+        }
+        .control-panel.collapsed {
+            transform: translateX(calc(100% + 20px));
+        }
+        .toggle-panel-btn {
+            position: absolute;
+            left: -40px;
+            top: 20px;
+            width: 40px;
+            height: 40px;
+            background: white;
+            border-radius: 8px 0 0 8px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            box-shadow: -2px 0 5px rgba(0,0,0,0.1);
+            font-size: 20px;
+        }
+        .control-panel h3 { margin-top: 0; font-size: 16px; border-bottom: 1px solid #eee; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .control-group { margin-bottom: 15px; }
+        .control-group label { display: block; margin-bottom: 5px; font-size: 14px; font-weight: bold; color: #444; }
+        .btn-toggle {
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 13px;
+            border-radius: 6px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+            transition: all 0.2s;
+        }
+        .btn-toggle.active { background: #007bff; color: #fff; border-color: #0056b3; }
+        
+        /* 定位按钮 */
+        .locate-btn {
+            position: absolute;
+            bottom: 100px;
+            right: 20px;
+            z-index: 1000;
+            background: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+            font-size: 20px;
+        }
+        
+        /* 天气悬浮窗 */
+        .weather-tooltip {
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            font-size: 13px;
+            pointer-events: none;
+        }
+        .weather-tooltip b { color: #333; }
+        .weather-data { margin-top: 5px; color: #666; }
+        
+        /* 图例 */
+        .legend {
+            position: absolute;
+            bottom: 30px;
+            left: 20px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.2);
+            font-size: 12px;
+        }
+        .legend-item { display: flex; align-items: center; margin-bottom: 5px; }
+        .legend-color { width: 15px; height: 15px; border-radius: 50%; margin-right: 8px; }
+        
+        /* 线条标注样式 */
+        .line-label {
+            background: none;
+            border: none;
+            box-shadow: none;
+            font-weight: bold;
+            color: #333;
+            text-shadow: 1px 1px 1px #fff;
+        }
+
+        /* 搜索框样式 */
+        .search-box {
+            display: flex;
+            gap: 5px;
+        }
+        .search-input {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .search-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .search-btn:hover { background: #0056b3; }
+
+        /* 搜索标记动画 */
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        .search-marker-icon {
+            font-size: 30px;
+            color: #e74c3c;
+            text-shadow: 0 0 5px rgba(0,0,0,0.3);
+            animation: bounce 0.6s infinite;
+        }
+
+        /* 移动端适配 */
+        @media screen and (max-width: 768px) {
+            .control-panel {
+                width: calc(100% - 40px);
+                top: auto;
+                bottom: 20px;
+                right: 20px;
+                max-height: 40vh;
+                overflow-y: auto;
+            }
+            .legend { bottom: 200px; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="locate-btn" onclick="locateMe()" title="定位到我的位置">🎯</div>
+
+<div class="control-panel" id="main-panel">
+    <div class="toggle-panel-btn" onclick="togglePanel()">⚙️</div>
+    <h3>地图控制中心</h3>
+    
+    <div class="control-group">
+        <label>地点搜索</label>
+        <div class="search-box">
+            <input type="text" id="search-input" class="search-input" placeholder="输入市场或地名..." onkeyup="if(event.keyCode==13) searchLocation()">
+            <button class="search-btn" onclick="searchLocation()">🔍</button>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label>实时时间</label>
+        <div id="current-time" style="font-size: 16px; font-weight: bold; color: #007bff; background: #f0f7ff; padding: 10px; border-radius: 4px; text-align: center;">
+            加载中...
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label>地理划分视图</label>
+        <button class="btn-toggle active" onclick="toggleView('base')">标准视图</button>
+        <button class="btn-toggle" onclick="toggleView('regional')">七大区划分</button>
+        <button class="btn-toggle" onclick="toggleView('lines')">水系/南北线</button>
+    </div>
+    
+    <div class="control-group">
+        <label>气象叠加层</label>
+        <button class="btn-toggle" id="btn-rainfall" onclick="toggleRainfall()">降雨量分布</button>
+    </div>
+
+    <div class="control-group">
+        <label>数据配置</label>
+        <input type="text" id="amap-key" placeholder="输入高德地图API Key" style="width: 100%; font-size: 12px; padding: 5px; box-sizing: border-box;" onchange="updateAmapKey(this.value)">
+        <p style="font-size: 10px; color: #888; margin-top: 5px;">* 接入实时天气需要Web服务Key</p>
+    </div>
+</div>
+
+<div class="legend" id="legend">
+    <div class="legend-item"><div class="legend-color" style="background: #ff4d4d;"></div>已开发市场</div>
+    <div class="legend-item"><div class="legend-color" style="background: #2ecc71;"></div>潜在待开发市场</div>
+    <div class="legend-item" id="rainfall-legend" style="display:none; flex-direction: column; align-items: flex-start;">
+        <div style="margin-bottom:5px;">降雨等级：</div>
+        <div style="display:flex; width:100%; height:10px; background: linear-gradient(to right, #a1d99b, #41ab5d, #08589e, #810f7c);"></div>
+        <div style="display:flex; justify-content: space-between; width:100%; font-size:10px;">
+            <span>小雨</span><span>中雨</span><span>大雨</span><span>暴雨</span>
+        </div>
+    </div>
+</div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    // 初始化地图
+    // 使用高德官方卫星/街道图（此处使用高德地图纠偏后的街道图）
+    var map = L.map('map', {
+        center: [34.34157, 108.93977],
+        zoom: 5,
+        zoomControl: false
+    });
+
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    // 高德街道图
+    var amapLayer = L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+        subdomains: ['1', '2', '3', '4'],
+        maxZoom: 18,
+        attribution: '&copy; <a href="https://www.amap.com/">Amap</a>'
+    }).addTo(map);
+
+    // 市场数据
+    const markets = [
+        { name: '嘉兴海广兴', type: 'developed', adcode: '330400', coords: [30.763, 120.761], radiation: [
+            { name: '杭州', coords: [30.274, 120.155] },
+            { name: '宁波', coords: [29.868, 121.544] },
+            { name: '绍兴', coords: [30.002, 120.582] },
+            { name: '湖州', coords: [30.867, 120.102] }
+        ]},
+        { name: '广州江南果菜批发市场', type: 'developed', adcode: '440111', coords: [23.166, 113.245], radiation: [
+            { name: '深圳', coords: [22.543, 114.057] },
+            { name: '佛山', coords: [23.021, 113.122] },
+            { name: '东莞', coords: [23.021, 113.751] },
+            { name: '中山', coords: [22.517, 113.393] },
+            { name: '珠海', coords: [22.270, 113.576] }
+        ]},
+        { name: '上海辉展进口水果批发市场', type: 'developed', adcode: '310112', coords: [31.065, 121.492], radiation: [
+            { name: '苏州', coords: [31.298, 120.585] },
+            { name: '无锡', coords: [31.491, 120.311] },
+            { name: '南通', coords: [31.980, 120.894] }
+        ]},
+        { name: '河南万邦国际农产品批发市场', type: 'developed', adcode: '410122', coords: [34.720, 113.985], radiation: [
+            { name: '开封', coords: [34.797, 114.307] },
+            { name: '洛阳', coords: [34.619, 112.454] },
+            { name: '新乡', coords: [35.303, 113.926] },
+            { name: '安阳', coords: [36.097, 114.392] }
+        ]},
+        { name: '长沙红星农副产品大市场', type: 'developed', adcode: '430111', coords: [28.114, 113.011], radiation: [
+            { name: '株洲', coords: [27.827, 113.133] },
+            { name: '湘潭', coords: [27.829, 112.944] },
+            { name: '岳阳', coords: [29.356, 113.132] }
+        ]},
+        { name: '重庆双福国际农贸城', type: 'developed', adcode: '500116', coords: [29.378, 106.291], radiation: [
+            { name: '成都', coords: [30.572, 104.066] },
+            { name: '泸州', coords: [28.871, 105.441] },
+            { name: '宜宾', coords: [28.751, 104.643] }
+        ]},
+        { name: '南昌深圳农产品中心批发市场', type: 'developed', adcode: '360104', coords: [28.618, 115.932], radiation: [
+            { name: '九江', coords: [29.705, 115.992] },
+            { name: '赣州', coords: [25.831, 114.935] },
+            { name: '上饶', coords: [28.444, 117.943] }
+        ]},
+        { name: '香港油麻地果栏市场', type: 'developed', adcode: '810000', coords: [22.312, 114.170], radiation: [
+            { name: '澳门', coords: [22.198, 113.543] },
+            { name: '珠海', coords: [22.270, 113.576] }
+        ]},
+        { name: '陕西西安雨润农产品交易市场', type: 'developed', adcode: '610112', coords: [34.426, 108.889], radiation: [
+            { name: '咸阳', coords: [34.329, 108.708] },
+            { name: '渭南', coords: [34.499, 109.502] },
+            { name: '宝鸡', coords: [34.362, 107.237] }
+        ]},
+        { name: '金华水果批发市场', type: 'developed', adcode: '330703', coords: [29.096, 119.684], radiation: [
+            { name: '衢州', coords: [28.956, 118.859] },
+            { name: '丽水', coords: [28.456, 119.921] }
+        ]},
+        { name: '兰州国际高原夏菜副食品采购中心', type: 'developed', adcode: '620102', coords: [36.052, 103.954], radiation: [
+            { name: '西宁', coords: [36.623, 101.778] },
+            { name: '白银', coords: [36.544, 104.137] }
+        ]},
+        
+        { name: '北京新发地农产品批发市场', type: 'potential', adcode: '110106', coords: [39.814, 116.342], radiation: [
+            { name: '天津', coords: [39.084, 117.200] },
+            { name: '廊坊', coords: [39.523, 116.703] },
+            { name: '保定', coords: [38.867, 115.464] }
+        ]},
+        { name: '南京众彩批发市场', type: 'potential', adcode: '320115', coords: [32.012, 118.885], radiation: [
+            { name: '镇江', coords: [32.189, 119.425] },
+            { name: '扬州', coords: [32.394, 119.412] },
+            { name: '马鞍山', coords: [31.670, 118.507] }
+        ]},
+        { name: '乌鲁木齐新疆九鼎农产品物流园', type: 'potential', adcode: '650100', coords: [43.765, 87.512], radiation: [
+            { name: '昌吉', coords: [44.007, 87.304] },
+            { name: '石河子', coords: [44.305, 86.041] }
+        ]},
+        { name: '成都四川雨润国际农产品交易中心', type: 'potential', adcode: '510182', coords: [30.954, 103.951], radiation: [
+            { name: '绵阳', coords: [31.467, 104.679] },
+            { name: '德阳', coords: [31.126, 104.398] },
+            { name: '乐山', coords: [29.552, 103.765] }
+        ]},
+        { name: '贵州贵阳五里冲农副产品批发市场', type: 'potential', adcode: '520103', coords: [26.552, 106.671], radiation: [
+            { name: '安顺', coords: [26.253, 105.946] },
+            { name: '遵义', coords: [27.703, 106.927] }
+        ]},
+        { name: '武汉光霞果批市场/四季美农贸城', type: 'potential', adcode: '420111', coords: [30.501, 114.282], radiation: [
+            { name: '鄂州', coords: [30.390, 114.894] },
+            { name: '孝感', coords: [30.926, 113.926] },
+            { name: '黄冈', coords: [30.453, 114.872] }
+        ]}
+    ];
+
+    var marketLayers = {
+        developed: L.layerGroup(),
+        potential: L.layerGroup(),
+        radiation: L.layerGroup()
+    };
+
+    // 绘制市场 Marker
+    markets.forEach(m => {
+        const color = m.type === 'developed' ? '#ff4d4d' : '#2ecc71';
+        const marker = L.circleMarker(m.coords, {
+            radius: 8,
+            fillColor: color,
+            color: '#fff',
+            weight: 2,
+            opacity: 1,
+            fillOpacity: 0.8
+        });
+
+        const popupContent = `
+            <div style="font-family: Arial; min-width: 150px;">
+                <b style="font-size:14px; color: ${color};">${m.name}</b><br/>
+                <hr style="margin:5px 0; border:0; border-top:1px solid #eee;"/>
+                <span style="color:#666;">市场类型：</span>${m.type === 'developed' ? '已开发' : '潜在待开发'}<br/>
+                <span style="color:#666;">城市编码：</span>${m.adcode}<br/>
+                <span style="color:#666;">辐射城市：</span>${m.radiation.map(r => r.name).join('、')}
+            </div>
+        `;
+        marker.bindPopup(popupContent);
+        
+        // 鼠标移入标记点时触发天气（可选）
+        marker.on('mouseover', function(e) {
+            updateTooltip({ latlng: L.latLng(m.coords), adcode: m.adcode });
+        });
+        
+        // 辐射圈 (Radiation Circles)
+        const radiationCircle = L.circle(m.coords, {
+            radius: 120000, 
+            color: color,
+            weight: 1,
+            fillColor: color,
+            fillOpacity: 0.05,
+            interactive: false
+        });
+        
+        // 辐射城市标签 (Radiation City Labels)
+        m.radiation.forEach(rc => {
+            const cityLabel = L.marker(rc.coords, {
+                icon: L.divIcon({
+                    className: 'line-label',
+                    html: `<div style="color: #444; font-size: 11px; font-weight: normal; background: rgba(255,255,255,0.7); padding: 2px 4px; border-radius: 3px; border: 1px solid #ddd;">${rc.name}</div>`,
+                    iconSize: [50, 20]
+                })
+            });
+            marketLayers.radiation.addLayer(cityLabel);
+            
+            // 连线
+            const line = L.polyline([m.coords, rc.coords], {
+                color: color,
+                weight: 1,
+                opacity: 0.3,
+                dashArray: '5, 5'
+            });
+            marketLayers.radiation.addLayer(line);
+        });
+
+        marketLayers[m.type].addLayer(marker);
+        marketLayers[m.type].addLayer(radiationCircle);
+    });
+
+    marketLayers.developed.addTo(map);
+    marketLayers.potential.addTo(map);
+    marketLayers.radiation.addTo(map);
+
+    // 地理分界线数据 (Approximate)
+    const lines = {
+        'QinlingHuaihe': {
+            coords: [[34.2, 104.5], [34.0, 110.0], [33.5, 115.0], [33.0, 120.0]],
+            color: '#e67e22', label: '秦岭-淮河线'
+        },
+        'Yangtze': {
+            coords: [[34.0, 91.5], [33.0, 95.0], [27.0, 100.0], [26.5, 103.0], [29.0, 105.0], [29.5, 110.0], [30.5, 114.0], [31.5, 118.0], [31.2, 121.5]],
+            color: '#3498db', label: '长江主干流'
+        },
+        'YellowRiver': {
+            coords: [[35.0, 96.0], [36.5, 101.0], [36.0, 104.0], [38.0, 106.0], [40.5, 108.0], [40.0, 111.0], [35.0, 110.0], [34.8, 114.0], [37.5, 119.0]],
+            color: '#f1c40f', label: '黄河主干流'
+        }
+    };
+
+    var lineLayers = L.layerGroup();
+    Object.keys(lines).forEach(key => {
+        const lineData = lines[key];
+        const polyline = L.polyline(lineData.coords, {
+            color: lineData.color,
+            weight: 4,
+            opacity: 0.8,
+            dashArray: key === 'QinlingHuaihe' ? '10, 10' : ''
+        });
+        lineLayers.addLayer(polyline);
+        
+        // 文字标签
+        const label = L.marker(lineData.coords[Math.floor(lineData.coords.length/2)], {
+            icon: L.divIcon({
+                className: 'line-label',
+                html: lineData.label,
+                iconSize: [100, 20]
+            })
+        });
+        lineLayers.addLayer(label);
+    });
+
+    // 七大地理分区 (Improved rough boundaries for demo)
+    var regionalLayers = L.layerGroup();
+    const regions = [
+        { name: '华北', color: '#ff9ff3', coords: [[35, 110], [42, 110], [42, 120], [35, 120]] },
+        { name: '华东', color: '#feca57', coords: [[25, 115], [35, 115], [35, 122], [25, 122]] },
+        { name: '华南', color: '#ff6b6b', coords: [[18, 105], [25, 105], [25, 118], [18, 118]] },
+        { name: '华中', color: '#48dbfb', coords: [[25, 110], [33, 110], [33, 116], [25, 116]] },
+        { name: '西北', color: '#1dd1a1', coords: [[33, 73], [49, 73], [49, 110], [33, 110]] },
+        { name: '西南', color: '#54a0ff', coords: [[21, 97], [33, 97], [33, 110], [21, 110]] },
+        { name: '东北', color: '#5f27cd', coords: [[40, 118], [53, 118], [53, 135], [40, 135]] }
+    ];
+
+    regions.forEach(r => {
+        const polygon = L.polygon(r.coords, {
+            color: r.color,
+            weight: 2,
+            fillOpacity: 0.1,
+            dashArray: '5, 5'
+        });
+        regionalLayers.addLayer(polygon);
+        
+        // 区域中心点
+        const center = [ (r.coords[0][0] + r.coords[1][0])/2, (r.coords[0][1] + r.coords[2][1])/2 ];
+        const label = L.marker(center, {
+            icon: L.divIcon({
+                className: 'line-label',
+                html: `<div style="color: ${r.color}; font-size: 16px;">${r.name}</div>`,
+                iconSize: [60, 20]
+            })
+        });
+        regionalLayers.addLayer(label);
+    });
+
+    // 气象数据交互
+    var weatherTooltip = L.tooltip({
+        permanent: false,
+        direction: 'top',
+        className: 'weather-tooltip',
+        sticky: true
+    });
+
+    let amapKey = '';
+    const weatherCache = {};
+
+    function updateAmapKey(val) {
+        amapKey = val.trim();
+        console.log('Amap Key updated');
+    }
+
+    // 模拟或真实气象数据获取函数
+    async function getWeatherData(lat, lng, adcodeParam = null) {
+        if (!amapKey) {
+            return {
+                temp: (15 + Math.random() * 15).toFixed(1),
+                humidity: (40 + Math.random() * 50).toFixed(0),
+                text: ['晴', '多云', '阴', '小雨'][Math.floor(Math.random()*4)],
+                city: '模拟数据'
+            };
+        }
+
+        const cacheKey = adcodeParam || `${lat.toFixed(2)},${lng.toFixed(2)}`;
+        if (weatherCache[cacheKey]) return weatherCache[cacheKey];
+
+        try {
+            let adcode = adcodeParam;
+            if (!adcode) {
+                // 1. 逆地理编码获取 adcode
+                const regeoUrl = `https://restapi.amap.com/v3/geocode/regeo?key=${amapKey}&location=${lng},${lat}`;
+                const regeoRes = await fetch(regeoUrl).then(res => res.json());
+                if (regeoRes.status === '1' && regeoRes.regeocode.addressComponent.adcode) {
+                    adcode = regeoRes.regeocode.addressComponent.adcode;
+                }
+            }
+            
+            if (adcode) {
+                // 2. 获取天气信息
+                const weatherUrl = `https://restapi.amap.com/v3/weather/weatherInfo?key=${amapKey}&city=${adcode}`;
+                const weatherRes = await fetch(weatherUrl).then(res => res.json());
+
+                if (weatherRes.status === '1' && weatherRes.lives.length > 0) {
+                    const live = weatherRes.lives[0];
+                    const result = {
+                        temp: live.temperature,
+                        humidity: live.humidity,
+                        text: live.weather,
+                        city: live.city,
+                        reporttime: live.reporttime
+                    };
+                    weatherCache[cacheKey] = result;
+                    return result;
+                }
+            }
+        } catch (err) {
+            console.error('Amap API Error:', err);
+        }
+
+        return { temp: 'N/A', humidity: 'N/A', text: '错误', city: '未知' };
+    }
+
+    // 防抖处理
+    function debounce(func, wait) {
+        let timeout;
+        return function(...args) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(this, args), wait);
+        };
+    }
+
+    const updateTooltip = async (e) => {
+        if (!rainfallActive) {
+            const lat = e.latlng.lat;
+            const lng = e.latlng.lng;
+            const data = await getWeatherData(lat, lng, e.adcode);
+            
+            weatherTooltip.setLatLng(e.latlng)
+                .setContent(`
+                    <div style="text-align:center; min-width: 100px;">
+                        <b style="font-size:12px; color:#007bff;">${data.city}</b><br/>
+                        <b style="font-size:14px; color:#333;">${data.text}</b><br/>
+                        <span style="font-size:20px; font-weight:bold;">${data.temp}°C</span><br/>
+                        <span style="color:#666;">湿度: ${data.humidity}%</span><br/>
+                        ${data.reporttime ? `<span style="color:#999; font-size:9px;">发布: ${data.reporttime.split(' ')[1]}</span>` : ''}
+                    </div>
+                `)
+                .addTo(map);
+        }
+    };
+
+    map.on('mousemove', debounce(updateTooltip, 200));
+
+    // 降雨层 (Rainfall Overlay Mock)
+    var rainfallLayer = L.layerGroup();
+    var rainfallActive = false;
+
+    function createRainfallOverlay() {
+        // 覆盖全国的大规模随机降雨斑块
+        for (let i = 0; i < 150; i++) {
+            const lat = 18 + Math.random() * 35;
+            const lng = 80 + Math.random() * 50;
+            const radius = 100000 + Math.random() * 200000;
+            const intensity = Math.random();
+            // 气象局降雨配色：淡绿(小雨)、深绿(中雨)、蓝色(大雨)、紫色(暴雨)
+            let color = '#A6F28F'; 
+            if (intensity > 0.4) color = '#3DBA3D'; 
+            if (intensity > 0.7) color = '#61B8FF'; 
+            if (intensity > 0.9) color = '#FA00FA'; 
+
+            L.circle([lat, lng], {
+                radius: radius,
+                stroke: false,
+                fillColor: color,
+                fillOpacity: 0.6
+            }).addTo(rainfallLayer);
+        }
+    }
+
+    function toggleRainfall() {
+        rainfallActive = !rainfallActive;
+        const btn = document.getElementById('btn-rainfall');
+        const legend = document.getElementById('rainfall-legend');
+        
+        if (rainfallActive) {
+            rainfallLayer.clearLayers();
+            createRainfallOverlay();
+            rainfallLayer.addTo(map);
+            btn.classList.add('active');
+            legend.style.display = 'flex';
+            map.closeTooltip();
+        } else {
+            map.removeLayer(rainfallLayer);
+            btn.classList.remove('active');
+            legend.style.display = 'none';
+        }
+    }
+
+    // 视图切换逻辑
+    function toggleView(view) {
+        // 更新按钮状态
+        const buttons = document.querySelectorAll('.control-panel .btn-toggle');
+        buttons.forEach(b => {
+            if (b.innerText.includes('视图') || b.innerText.includes('线') || b.innerText.includes('区')) {
+                b.classList.remove('active');
+            }
+        });
+        event.target.classList.add('active');
+
+        // 清除旧图层
+        map.removeLayer(lineLayers);
+        map.removeLayer(regionalLayers);
+
+        if (view === 'lines') {
+            lineLayers.addTo(map);
+        } else if (view === 'regional') {
+            regionalLayers.addTo(map);
+        }
+    }
+
+    function toggleMarkers(type, checked) {
+        if (checked) {
+            marketLayers[type].addTo(map);
+        } else {
+            map.removeLayer(marketLayers[type]);
+        }
+    }
+
+    // 默认不显示分界线
+
+    // 实时时钟
+    function updateClock() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        const seconds = String(now.getSeconds()).padStart(2, '0');
+        
+        const timeString = `${year}年${month}月${day}日 ${hours}:${minutes}:${seconds}`;
+        document.getElementById('current-time').innerText = timeString;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // 面板收起/展开
+    function togglePanel() {
+        const panel = document.getElementById('main-panel');
+        panel.classList.toggle('collapsed');
+        const btn = document.querySelector('.toggle-panel-btn');
+        btn.innerText = panel.classList.contains('collapsed') ? '📊' : '⚙️';
+    }
+
+    // 定位功能
+    function locateMe() {
+        if (!navigator.geolocation) {
+            alert('您的浏览器不支持地理定位');
+            return;
+        }
+        
+        // 微信内可能需要 HTTPS 或通过微信 SDK，这里使用浏览器标准 API
+        const btn = document.querySelector('.locate-btn');
+        btn.innerText = '⌛';
+        
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                map.setView([lat, lng], 15);
+                L.marker([lat, lng]).addTo(map).bindPopup('您当前的位置').openPopup();
+                btn.innerText = '🎯';
+            },
+            (err) => {
+                console.error(err);
+                alert('定位失败，请确保已开启 GPS 并授予权限（部分浏览器要求必须在 HTTPS 环境下使用定位）');
+                btn.innerText = '🎯';
+            },
+            { enableHighAccuracy: true, timeout: 10000 }
+        );
+    }
+
+    // 搜索高亮标记
+    let searchHighlightMarker = null;
+
+    function addSearchHighlight(coords, label) {
+        if (searchHighlightMarker) map.removeLayer(searchHighlightMarker);
+        
+        const icon = L.divIcon({
+            className: 'search-marker-icon',
+            html: '📍', // 也可以用自定义 SVG 指针
+            iconSize: [30, 40],
+            iconAnchor: [15, 40]
+        });
+
+        searchHighlightMarker = L.marker(coords, { icon: icon }).addTo(map);
+        searchHighlightMarker.bindPopup(`<b>${label}</b>`).openPopup();
+        
+        // 5秒后停止跳动或移除（可选）
+    }
+
+    // 搜索功能实现
+    async function searchLocation() {
+        const query = document.getElementById('search-input').value.trim();
+        if (!query) return;
+
+        // 1. 先在本地市场列表中查找
+        const localMarket = markets.find(m => m.name.includes(query));
+        if (localMarket) {
+            map.setView(localMarket.coords, 15); // 放大到 15 级
+            addSearchHighlight(localMarket.coords, localMarket.name);
+            return;
+        }
+
+        // 2. 如果配置了 Amap Key，则调用高德 API 进行地名检索
+        if (amapKey) {
+            try {
+                const geoUrl = `https://restapi.amap.com/v3/geocode/geo?key=${amapKey}&address=${encodeURIComponent(query)}`;
+                const res = await fetch(geoUrl).then(r => r.json());
+                if (res.status === '1' && res.geocodes.length > 0) {
+                    const loc = res.geocodes[0].location.split(',');
+                    const coords = [parseFloat(loc[1]), parseFloat(loc[0])];
+                    map.setView(coords, 15); // 放大到 15 级
+                    addSearchHighlight(coords, query);
+                } else {
+                    alert('未找到相关地点，请检查输入或 API Key 是否正确');
+                }
+            } catch (err) {
+                console.error('Search failed:', err);
+            }
+        } else {
+            alert('本地市场未找到 "' + query + '"。如需搜索全网地点，请先在下方配置高德地图 API Key。');
+        }
+    }
+</script>
+</body>
+</html>
